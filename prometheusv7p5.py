@@ -428,7 +428,7 @@ class EnhancedFinancialAnalysisSystemV6:
             with open('meta_model.pkl', 'rb') as f:
                 self.meta_model = pickle.load(f)
         else:
-            self.meta_model = LGBMClassifier(n_estimators=100, max_depth=5, random_state=42, feature_fraction=0.3)
+            self.meta_model = LGBMClassifier(n_estimators=200, max_depth=5, random_state=42, feature_fraction=0.5)
             self.meta_model.fit(X_train, y_train)
             with open('meta_model.pkl', 'wb') as f:
                 pickle.dump(self.meta_model, f)

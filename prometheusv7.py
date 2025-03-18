@@ -476,7 +476,7 @@ class EnhancedFinancialAnalysisSystemV6:
         y_test = target.iloc[train_size:]
         
         print(f"Meta test size: {len(y_test)}, Positives: {y_test.sum()}")
-        
+
         # Build or load meta-model
         if os.path.exists('meta_model.pkl') and not hasattr(self, 'retrain'):
             with open('meta_model.pkl', 'rb') as f:
