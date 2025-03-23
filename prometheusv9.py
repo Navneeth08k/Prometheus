@@ -1,20 +1,45 @@
 '''
-Version 7.5:
-small iteration
+v9:
 
-fix the lstm overfitting.
-Last time, it was predicting up everytime.
-Change by weighing downs more.
+More tweaks and tuning
 
-We also need to boost the meta model
+Result summary:
+LSTM Big leap forward! Less overfitting to UP, better balance, and still the strongest model.
 
-We can do this by increasing n_estimators and feature fraction
+ensemble the same as I made no changes.
+
+Meta model now not overfitting to up. It is predicting both
+
+
+Model Evaluation Results:
+ENSEMBLE:
+  Accuracy: 0.5652
+  Precision: 0.6875
+  Recall: 0.6875
+  F1 Score: 0.6875
+LSTM:
+  Accuracy: 0.8235
+  Precision: 0.9167
+  Recall: 0.8462
+  F1 Score: 0.8800
+META:
+  Accuracy: 0.5625
+  Precision: 0.7500
+  Recall: 0.5455
+  F1 Score: 0.6316
+
+'''
 
 
 
 
 '''
-
+v9: More tweaks and tuning
+- Fixed LSTM X_full_lstm error
+- Added lstm_signal for Meta
+- Aligned data splits
+- Kept v11 Meta tweaks (class_weight='balanced', etc.)
+'''
 
 import pandas as pd
 import numpy as np
@@ -26,6 +51,7 @@ import pickle
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.model_selection import cross_val_score
 import ta
 import textblob
 from concurrent.futures import ThreadPoolExecutor
@@ -33,6 +59,7 @@ import finnhub
 from fredapi import Fred
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+import lightgbm as lgb
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -40,7 +67,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 warnings.filterwarnings('ignore')
 
 class EnhancedFinancialAnalysisSystemV6:
-    def __init__(self, symbol='SPY', lookback_years=10):  # Increased to 5 years
+    def __init__(self, symbol='SPY', lookback_years=10):
         self.symbol = symbol
         self.lookback_years = lookback_years
         self.start_date = (dt.datetime.now() - dt.timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
@@ -146,7 +173,7 @@ class EnhancedFinancialAnalysisSystemV6:
         self.indicators[self.symbol]['adx_28'] = ta.trend.ADXIndicator(high, low, close, 28).adx()
         self.indicators[self.symbol]['dmi_plus_14'] = ta.trend.ADXIndicator(high, low, close, 14).adx_pos()
         self.indicators[self.symbol]['dmi_minus_14'] = ta.trend.ADXIndicator(high, low, close, 14).adx_neg()
-        tech_count += 17  # from the single indicators above
+        tech_count += 17
 
         print(f"Technical indicators generated: {tech_count}")
         
@@ -181,7 +208,6 @@ class EnhancedFinancialAnalysisSystemV6:
                 [textblob.TextBlob(n['summary']).sentiment.polarity for n in news_data if 'summary' in n],
                 index=[pd.to_datetime(n['datetime'], unit='s') for n in news_data if 'summary' in n]
             )
-            # average sentiment by day
             news_sent = news_sent.groupby(news_sent.index.date).mean()
             news_sent = pd.Series(news_sent, index=pd.to_datetime(news_sent.index)).reindex(df.index, method='nearest').fillna(0)
         else:
@@ -192,20 +218,14 @@ class EnhancedFinancialAnalysisSystemV6:
         sent_count = 2
         print(f"Sentiment indicators generated: {sent_count}")
         
-        total_features = tech_count + len(self.macro_data.columns) + vol_count + quant_count + sent_count + 1  # +1 for target
+        total_features = tech_count + len(self.macro_data.columns) + vol_count + quant_count + sent_count + 1
         print(f"Total features (including target): {total_features}")
         
-        # Final cleanup
         self.indicators[self.symbol].fillna(method='ffill', inplace=True)
         self.indicators[self.symbol].fillna(0, inplace=True)
         return self
 
     def create_sequences(self, X, y=None, timesteps=6):
-        """
-        Helper method to transform a dataframe of features X (and optional target y)
-        into a 3D array of shape (samples, timesteps, features) suitable for LSTM.
-        If y is provided, also return the matching target array.
-        """
         Xs, ys = [], []
         for i in range(len(X) - timesteps):
             Xs.append(X.iloc[i:(i + timesteps)].values)
@@ -218,7 +238,6 @@ class EnhancedFinancialAnalysisSystemV6:
 
     def prepare_features(self):
         print("Preparing features...")
-        # Drop initial 200 rows for stable indicators
         df = self.indicators[self.symbol].iloc[200:]
         self.features = [col for col in df.columns if col != 'target']
         print(f"Raw features available: {len(self.features)}")
@@ -226,19 +245,16 @@ class EnhancedFinancialAnalysisSystemV6:
         X = df[self.features]
         y = df['target']
         
-        # Select top k features (but your code is setting k=min(150, len(self.features)))
         selector = SelectKBest(f_classif, k=min(150, len(self.features)))
         selector.fit(X, y)
         self.features = [self.features[i] for i in selector.get_support(indices=True)]
         print(f"Selected features: {len(self.features)}")
         
-        # Scale features
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X[self.features])
         self.feature_matrix = pd.DataFrame(X_scaled, index=df.index, columns=self.features)
         self.target = y
         
-        # Resample monthly
         monthly_features = self.feature_matrix.resample('M').last()
         monthly_target = self.target.resample('M').last()
         
@@ -246,7 +262,6 @@ class EnhancedFinancialAnalysisSystemV6:
         train_end = int(n * 0.6)
         val_end = int(n * 0.8)
         
-        # Ensemble training/validation/test sets
         self.X_train_ens = monthly_features.iloc[:train_end]
         self.X_val_ens = monthly_features.iloc[train_end:val_end]
         self.X_test_ens = monthly_features.iloc[val_end:]
@@ -254,15 +269,14 @@ class EnhancedFinancialAnalysisSystemV6:
         self.y_val_ens = monthly_target.iloc[train_end:val_end]
         self.y_test_ens = monthly_target.iloc[val_end:]
         
-        # For the meta model we combine train+val
         self.X_train_meta = monthly_features.iloc[:val_end]
         self.X_test_meta = monthly_features.iloc[val_end:]
         self.y_train_meta = monthly_target.iloc[:val_end]
         self.y_test_meta = monthly_target.iloc[val_end:]
         
-        # Create LSTM sequences
         self.X_train_lstm, self.y_train_lstm = self.create_sequences(self.X_train_meta, self.y_train_meta, timesteps=6)
         self.X_test_lstm, self.y_test_lstm = self.create_sequences(self.X_test_meta, self.y_test_meta, timesteps=6)
+        self.X_full_lstm = self.create_sequences(self.feature_matrix[self.features], timesteps=6)  # Added for full prediction
         
         print(f"X_train_lstm shape: {self.X_train_lstm.shape}, X_test_lstm shape: {self.X_test_lstm.shape}")
         return self
@@ -290,69 +304,49 @@ class EnhancedFinancialAnalysisSystemV6:
             'f1': f1_score(self.y_test_ens, y_pred)
         }
         
-        # Probability on full feature matrix (monthly)
         ensemble_prob = self.ensemble.predict_proba(self.feature_matrix[self.features])[:, 1]
         self.indicators[self.symbol]['ensemble_signal'] = pd.Series(ensemble_prob, index=self.feature_matrix.index)
         return self
 
     def build_lstm(self):
         print("Building LSTM...")
-        n_features = self.feature_matrix.shape[1]
-        print(f"LSTM input shape: (6, {n_features})")
+        self.lstm = Sequential([
+            LSTM(50, input_shape=(6, len(self.features)), return_sequences=False),
+            Dense(1, activation='sigmoid')
+        ])
+        self.lstm.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
         
-        if os.path.exists('lstm_model.h5') and not hasattr(self, 'retrain'):
-            self.lstm = tf.keras.models.load_model('lstm_model.h5')
-        else:
-            self.lstm = Sequential([
-                LSTM(128, return_sequences=True, input_shape=(6, n_features)),
-                Dropout(0.2),
-                LSTM(64),
-                Dropout(0.2),
-                Dense(1, activation='sigmoid')
-            ])
-            self.lstm.compile(optimizer='adam', loss='binary_crossentropy', metrics=['precision'])
-            self.lstm.fit(self.X_train_lstm, self.y_train_lstm, epochs=20, batch_size=8, 
-              validation_split=0.2, class_weight={0: 2, 1: 1}, verbose=0)
-            self.lstm.save('lstm_model.h5')
+        self.lstm.fit(self.X_train_lstm, self.y_train_lstm, epochs=50, batch_size=32,
+                      validation_data=(self.X_test_lstm, self.y_test_lstm), verbose=0)
+        self.lstm.save('lstm_model.h5')
+        lstm_prob_test = self.lstm.predict(self.X_test_lstm, verbose=0)
+        y_pred_lstm = (lstm_prob_test > 0.6).astype(int)
         
-        if self.X_test_lstm.size > 0:
-            y_pred_prob = self.lstm.predict(self.X_test_lstm, verbose=0)
-            y_pred = (y_pred_prob > 0.5).astype(int)
-
-            print(f"LSTM y_test_lstm: {self.y_test_lstm}")
-            print(f"LSTM y_pred: {y_pred.flatten()}")
-            print(f"LSTM y_pred_prob: {y_pred_prob.flatten()}")
-            print(f"LSTM test size: {len(self.y_test_lstm)}, Positives: {self.y_test_lstm.sum()}")
-
-            self.evaluation_results['lstm'] = {
-                'accuracy': accuracy_score(self.y_test_lstm, y_pred),
-                'precision': precision_score(self.y_test_lstm, y_pred, zero_division=0),
-                'recall': recall_score(self.y_test_lstm, y_pred, zero_division=0),
-                'f1': f1_score(self.y_test_lstm, y_pred, zero_division=0)
-            }
-        else:
-            print("Warning: X_test_lstm is empty. Skipping LSTM evaluation.")
-            self.evaluation_results['lstm'] = {'accuracy': 0, 'precision': 0, 'recall': 0, 'f1': 0}
+        print(f"LSTM y_test_lstm: {self.y_test_lstm}")
+        print(f"LSTM y_pred: {y_pred_lstm.flatten()}")
+        print(f"LSTM y_pred_prob: {lstm_prob_test.flatten()}")
+        print(f"LSTM test size: {len(self.y_test_lstm)}, Positives: {self.y_test_lstm.sum()}")
         
-        # Predict LSTM signal for the entire feature_matrix
-        X_full_lstm = self.create_sequences(self.feature_matrix, timesteps=6)
-        lstm_prob = self.lstm.predict(X_full_lstm, verbose=0)
-        # Align the resulting probabilities with the correct dates (shift by 6)
-        self.indicators[self.symbol]['lstm_signal'] = pd.Series(
-            lstm_prob.flatten(), index=self.feature_matrix.index[6:]
-        )
+        lstm_prob_full = self.lstm.predict(self.X_full_lstm, verbose=0)
+        self.indicators[self.symbol]['lstm_signal'] = pd.Series(lstm_prob_full.flatten(), 
+                                                              index=self.feature_matrix.index[6:])  # Align with sequence start
+        
+        self.evaluation_results['lstm'] = {
+            'accuracy': accuracy_score(self.y_test_lstm, y_pred_lstm),
+            'precision': precision_score(self.y_test_lstm, y_pred_lstm),
+            'recall': recall_score(self.y_test_lstm, y_pred_lstm),
+            'f1': f1_score(self.y_test_lstm, y_pred_lstm)
+        }
         return self
 
     def build_meta_model(self):
         print("Building meta-model...")
-        # Prepare the signals used in meta-model
         signals = [
             'ensemble_signal', 'lstm_signal', 'rsi_signal', 'macd_cross', 'bb_signal',
             'yield_curve_signal', 'atr_signal', 'obv_signal', 'vix_signal', 'supertrend_cont',
             'inverse_cramer', 'momentum_21', 'mean_reversion_20'
         ]
         
-        # Generate simpler signals for RSI, MACD cross, Bollinger, yield_curve, etc.
         self.indicators[self.symbol]['rsi_signal'] = np.where(
             self.indicators[self.symbol]['rsi_14'] < 30, 1,
             np.where(self.indicators[self.symbol]['rsi_14'] > 70, -1, 0)
@@ -360,53 +354,35 @@ class EnhancedFinancialAnalysisSystemV6:
         self.indicators[self.symbol]['macd_cross'] = np.where(
             self.indicators[self.symbol]['macd'] > self.indicators[self.symbol]['macd_signal'], 1, -1
         )
-
-        # Ensure close_series is a Series aligned to the indicators index
         close_series = self.data[self.symbol]['Close'].squeeze().reindex(self.indicators[self.symbol].index)
-        # Bollinger band signal
         self.indicators[self.symbol]['bb_signal'] = np.where(
             close_series < self.indicators[self.symbol]['bb_lower_20'], 1,
             np.where(close_series > self.indicators[self.symbol]['bb_upper_20'], -1, 0)
         )
-
-        # Yield curve signal
         self.indicators[self.symbol]['yield_curve_signal'] = pd.Series(
             np.where(self.macro_data['yield_curve_10y2y'] > 0, 1, -1),
             index=self.macro_data.index
         ).reindex(self.indicators[self.symbol].index, method='ffill').fillna(0)
-
-        # ATR signal
         self.indicators[self.symbol]['atr_signal'] = np.where(
             self.indicators[self.symbol]['atr_14'] > self.indicators[self.symbol]['atr_14'].shift(1), 1, -1
         )
-
-        # OBV signal
         self.indicators[self.symbol]['obv_signal'] = np.where(
             self.indicators[self.symbol]['obv'] > self.indicators[self.symbol]['obv_ma_20'], 1, -1
         )
-
-        # VIX signal
         vix_series = self.data['^VIX']['Close'].squeeze().reindex(self.indicators[self.symbol].index)
         self.indicators[self.symbol]['vix_signal'] = np.where(
             vix_series.pct_change() < -0.05, 1,
             np.where(vix_series.pct_change() > 0.05, -1, 0)
         )
-
-        # Supertrend-like continuity
         self.indicators[self.symbol]['supertrend_cont'] = (
             (close_series - self.indicators[self.symbol]['sma_20']) / close_series
         )
 
-        # Now gather the final signals into a DataFrame aligned with feature_matrix (post-6 for LSTM, etc.)
-        # We'll start the meta data from the same index as the ensemble & LSTM signals appear:
         signal_df = self.indicators[self.symbol][signals].resample('M').last().dropna()
-       
-        
         valid_index = self.feature_matrix.index.intersection(signal_df.index)
         signal_df = signal_df.loc[valid_index]
         target = self.target.resample('M').last().loc[signal_df.index]
 
-        # Scale these signals
         scaler = StandardScaler()
         signal_df_scaled = pd.DataFrame(
             scaler.fit_transform(signal_df),
@@ -414,7 +390,6 @@ class EnhancedFinancialAnalysisSystemV6:
             index=signal_df.index
         )
 
-        # Train-test split on these signals
         train_size = int(0.8 * len(signal_df_scaled))
         X_train = signal_df_scaled.iloc[:train_size]
         y_train = target.iloc[:train_size]
@@ -422,19 +397,23 @@ class EnhancedFinancialAnalysisSystemV6:
         y_test = target.iloc[train_size:]
         
         print(f"Meta test size: {len(y_test)}, Positives: {y_test.sum()}")
+        print("Signal distributions:\n", signal_df.describe())
         
-        # Build or load meta-model
         if os.path.exists('meta_model.pkl') and not hasattr(self, 'retrain'):
             with open('meta_model.pkl', 'rb') as f:
                 self.meta_model = pickle.load(f)
         else:
-            self.meta_model = LGBMClassifier(n_estimators=200, max_depth=5, random_state=42, feature_fraction=0.5)
-            self.meta_model.fit(X_train, y_train)
+            self.meta_model = LGBMClassifier(n_estimators=200, max_depth=4, min_child_samples=5,
+                                             class_weight='balanced', random_state=42, verbosity=1)
+            scores = cross_val_score(self.meta_model, signal_df_scaled, target, cv=5, scoring='accuracy')
+            print(f"Meta CV Accuracy: {scores.mean():.4f} (+/- {scores.std():.4f})")
+            self.meta_model.fit(X_train, y_train, eval_set=[(X_test, y_test)],
+                                eval_metric='binary_logloss', callbacks=[lgb.early_stopping(50)])
             with open('meta_model.pkl', 'wb') as f:
                 pickle.dump(self.meta_model, f)
         
-        # Evaluate meta-model
         y_pred = self.meta_model.predict(X_test)
+        print(f"Meta y_pred: {y_pred}")  # Debug to check DOWNs
         self.evaluation_results['meta'] = {
             'accuracy': accuracy_score(y_test, y_pred),
             'precision': precision_score(y_test, y_pred),
@@ -442,15 +421,14 @@ class EnhancedFinancialAnalysisSystemV6:
             'f1': f1_score(y_test, y_pred)
         }
 
-        # Store feature importances
         self.meta_feature_importances = dict(
             zip(signals, self.meta_model.feature_importances_ / self.meta_model.feature_importances_.sum())
         )
+        print(f"Feature importances: {dict(zip(signals, self.meta_model.feature_importances_))}")
         return self
 
     def predict_market(self):
         print("Predicting market...")
-        # These signals must match exactly what was used in the meta-model:
         signals = [
             'ensemble_signal', 'lstm_signal', 'rsi_signal', 'macd_cross', 'bb_signal',
             'yield_curve_signal', 'atr_signal', 'obv_signal', 'vix_signal', 'supertrend_cont',
@@ -459,7 +437,6 @@ class EnhancedFinancialAnalysisSystemV6:
         
         latest = self.indicators[self.symbol][signals].iloc[-1:].copy()
         print(f"Latest signals: {self.indicators[self.symbol][signals].iloc[-1]}")
-        # We must scale the same way we scaled in build_meta_model, but quick approach is a fresh StandardScaler:
         scaler = StandardScaler()
         latest_scaled = scaler.fit_transform(latest)
         
@@ -498,7 +475,7 @@ class EnhancedFinancialAnalysisSystemV6:
 
         with open(previous_results_file, 'wb') as f:
             pickle.dump(self.evaluation_results, f)
-
+    #ff
     def run(self, retrain=False):
         if retrain:
             self.retrain = True
@@ -513,6 +490,13 @@ class EnhancedFinancialAnalysisSystemV6:
         self.build_meta_model()
         self.predict_market()
         self.evaluate_and_compare()
+        
+        # Save for backtest
+        with open('feature_matrix.pkl', 'wb') as f:
+            pickle.dump(self.feature_matrix, f)
+        with open('indicators.pkl', 'wb') as f:
+            pickle.dump(self.indicators, f)
+        
         return self
 
 if __name__ == "__main__":

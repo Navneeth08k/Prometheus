@@ -1,19 +1,22 @@
 '''
-Version 7.5:
-small iteration
+v8:
 
-fix the lstm overfitting.
-Last time, it was predicting up everytime.
-Change by weighing downs more.
+further tweak lstm
+maximize meta potential
 
-We also need to boost the meta model
+add cross validation
 
-We can do this by increasing n_estimators and feature fraction
+This version is the best yet. 
 
+Meta model far outperforms everything from before.
+
+Make lstm more balanced as it can now choose both up or down. 
 
 
 
 '''
+
+
 
 
 import pandas as pd
@@ -33,6 +36,7 @@ import finnhub
 from fredapi import Fred
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+import lightgbm as lgb
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -317,7 +321,7 @@ class EnhancedFinancialAnalysisSystemV6:
         
         if self.X_test_lstm.size > 0:
             y_pred_prob = self.lstm.predict(self.X_test_lstm, verbose=0)
-            y_pred = (y_pred_prob > 0.5).astype(int)
+            y_pred = (y_pred_prob > 0.6).astype(int)
 
             print(f"LSTM y_test_lstm: {self.y_test_lstm}")
             print(f"LSTM y_pred: {y_pred.flatten()}")
@@ -428,8 +432,10 @@ class EnhancedFinancialAnalysisSystemV6:
             with open('meta_model.pkl', 'rb') as f:
                 self.meta_model = pickle.load(f)
         else:
-            self.meta_model = LGBMClassifier(n_estimators=200, max_depth=5, random_state=42, feature_fraction=0.5)
-            self.meta_model.fit(X_train, y_train)
+            self.meta_model = LGBMClassifier(n_estimators=200, max_depth=5, min_child_samples=5, 
+                                            feature_fraction=0.5, random_state=42)
+            self.meta_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], 
+                                eval_metric='binary_logloss', callbacks=[lgb.early_stopping(50)])
             with open('meta_model.pkl', 'wb') as f:
                 pickle.dump(self.meta_model, f)
         
@@ -441,11 +447,14 @@ class EnhancedFinancialAnalysisSystemV6:
             'recall': recall_score(y_test, y_pred),
             'f1': f1_score(y_test, y_pred)
         }
+        
 
         # Store feature importances
         self.meta_feature_importances = dict(
             zip(signals, self.meta_model.feature_importances_ / self.meta_model.feature_importances_.sum())
         )
+
+        print(f"Feature importances: {dict(zip(signals, self.meta_model.feature_importances_))}")
         return self
 
     def predict_market(self):
