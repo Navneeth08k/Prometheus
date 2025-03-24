@@ -7,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 import yfinance as yf
 from datetime import timedelta
 
+
 def load_data():
     """Load the saved feature matrix and models"""
     with open('feature_matrix.pkl', 'rb') as f:

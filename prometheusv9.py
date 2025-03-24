@@ -38,8 +38,9 @@ v9: More tweaks and tuning
 - Fixed LSTM X_full_lstm error
 - Added lstm_signal for Meta
 - Aligned data splits
-- Kept v11 Meta tweaks (class_weight='balanced', etc.)
+- Kept Meta tweaks (class_weight='balanced', etc.)
 '''
+
 
 import pandas as pd
 import numpy as np

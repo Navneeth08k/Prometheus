@@ -319,6 +319,7 @@ class EnhancedFinancialAnalysisSystemV6:
               validation_split=0.2, class_weight={0: 2, 1: 1}, verbose=0)
             self.lstm.save('lstm_model.h5')
         
+        
         if self.X_test_lstm.size > 0:
             y_pred_prob = self.lstm.predict(self.X_test_lstm, verbose=0)
             y_pred = (y_pred_prob > 0.6).astype(int)
